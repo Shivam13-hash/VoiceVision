@@ -395,7 +395,15 @@ def voice_selector():
 # ─────────────────────────────────────────────
 #  HELPERS
 # ─────────────────────────────────────────────
+def sanitize_image(image_bytes):
+    """Re-encode image via PIL → clean PNG bytes Azure will always accept."""
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
 def run_ocr(image_bytes):
+    image_bytes = sanitize_image(image_bytes)  # always send clean PNG
     headers = {
         "Ocp-Apim-Subscription-Key": CV_API_KEY,
         "Content-Type": "application/octet-stream",
@@ -499,7 +507,7 @@ if mode == "🖼️ Image → Speech":
 
         if go and uploaded:
             with st.spinner("🔍 Running Azure OCR…"):
-                img_bytes = uploaded.read()
+                uploaded.seek(0); img_bytes = uploaded.read()
                 extracted = run_ocr(img_bytes)
 
             if extracted:
@@ -558,7 +566,7 @@ elif mode == "🔍 Image → Text":
 
         if go and uploaded:
             with st.spinner("🔍 Running Azure OCR…"):
-                extracted = run_ocr(uploaded.read())
+                uploaded.seek(0); extracted = run_ocr(uploaded.read())
             if extracted:
                 st.success(f"✅ Done — {len(extracted)} characters, {len(extracted.split())} words")
                 st.markdown(f'<div class="result-box">{extracted}</div>', unsafe_allow_html=True)
