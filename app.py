@@ -396,34 +396,53 @@ def voice_selector():
 #  HELPERS
 # ─────────────────────────────────────────────
 def run_ocr(image_bytes):
-    # ── Use Azure REST API directly (avoids SDK version issues) ──
-    read_url = CV_ENDPOINT.rstrip("/") + "/vision/v3.2/read/analyze"
-    headers  = {
+    headers = {
         "Ocp-Apim-Subscription-Key": CV_API_KEY,
         "Content-Type": "application/octet-stream",
     }
-    # Submit image for analysis
-    resp = requests.post(read_url, headers=headers, data=image_bytes)
-    resp.raise_for_status()
+    poll_headers = {"Ocp-Apim-Subscription-Key": CV_API_KEY}
+    base = CV_ENDPOINT.rstrip("/")
 
-    # Get the operation URL from response header
-    operation_url = resp.headers["Operation-Location"]
+    # Try v3.2 first, then v3.1 as fallback
+    for api_ver in ["v3.2", "v3.1"]:
+        read_url = f"{base}/vision/{api_ver}/read/analyze"
+        resp = requests.post(read_url, headers=headers, data=image_bytes)
+
+        if resp.status_code == 202:          # accepted — proceed
+            operation_url = resp.headers["Operation-Location"]
+            break
+        elif resp.status_code == 404:        # wrong version, try next
+            continue
+        else:
+            # Show the real Azure error message on screen
+            try:
+                err_body = resp.json()
+                err_msg  = err_body.get("error", {}).get("message", resp.text)
+            except Exception:
+                err_msg = resp.text
+            st.error(f"❌ Azure OCR Error {resp.status_code}: {err_msg}")
+            return ""
+    else:
+        st.error("❌ Azure endpoint not reachable. Check your CV_ENDPOINT.")
+        return ""
 
     # Poll until complete
     for _ in range(30):
         time.sleep(1)
-        poll = requests.get(operation_url, headers={"Ocp-Apim-Subscription-Key": CV_API_KEY})
+        poll      = requests.get(operation_url, headers=poll_headers)
         poll_data = poll.json()
-        status = poll_data.get("status", "")
+        status    = poll_data.get("status", "")
         if status not in ["notStarted", "running"]:
             break
 
-    # Extract text lines
+    # Extract text
     text = ""
     if status == "succeeded":
         for read_result in poll_data.get("analyzeResult", {}).get("readResults", []):
             for line in read_result.get("lines", []):
                 text += line.get("text", "") + " "
+    elif status == "failed":
+        st.error(f"❌ OCR processing failed: {poll_data}")
     return text.strip()
 
 
