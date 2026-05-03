@@ -3,6 +3,7 @@ import time
 import os
 import io
 import base64
+import requests
 from PIL import Image
 
 # ─────────────────────────────────────────────
@@ -395,24 +396,34 @@ def voice_selector():
 #  HELPERS
 # ─────────────────────────────────────────────
 def run_ocr(image_bytes):
-    from azure.cognitiveservices.vision.computervision import ComputerVisionClient
-    from msrest.authentication import CognitiveServicesCredentials
+    # ── Use Azure REST API directly (avoids SDK version issues) ──
+    read_url = CV_ENDPOINT.rstrip("/") + "/vision/v3.2/read/analyze"
+    headers  = {
+        "Ocp-Apim-Subscription-Key": CV_API_KEY,
+        "Content-Type": "application/octet-stream",
+    }
+    # Submit image for analysis
+    resp = requests.post(read_url, headers=headers, data=image_bytes)
+    resp.raise_for_status()
 
-    cv_client = ComputerVisionClient(CV_ENDPOINT, CognitiveServicesCredentials(CV_API_KEY))
-    read_response = cv_client.read_in_stream(io.BytesIO(image_bytes), raw=True)
-    operation_id  = read_response.headers["Operation-Location"].split("/")[-1]
+    # Get the operation URL from response header
+    operation_url = resp.headers["Operation-Location"]
 
+    # Poll until complete
     for _ in range(30):
-        result = cv_client.get_read_result(operation_id)
-        if result.status not in ["notStarted", "running"]:
-            break
         time.sleep(1)
+        poll = requests.get(operation_url, headers={"Ocp-Apim-Subscription-Key": CV_API_KEY})
+        poll_data = poll.json()
+        status = poll_data.get("status", "")
+        if status not in ["notStarted", "running"]:
+            break
 
+    # Extract text lines
     text = ""
-    if result.status == "succeeded":
-        for page in result.analyze_result.read_results:
-            for line in page.lines:
-                text += line.text + " "
+    if status == "succeeded":
+        for read_result in poll_data.get("analyzeResult", {}).get("readResults", []):
+            for line in read_result.get("lines", []):
+                text += line.get("text", "") + " "
     return text.strip()
 
 
